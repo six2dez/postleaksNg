@@ -4,15 +4,24 @@ include:
   rules:
     - apikey
     - apikey-known
-    - aws-account
     - aws-id
     - aws-secret
     - aws-token
-    - privatekey
-    - secret
-    - webhook
+    - comment
+    - cors
+    - creditcard
+    - dockercfg
+    - file-known
+    - htpasswd
+    - npmrc
     - password
+    - pip
+    - privatekey
+    - pypirc
+    - secret
+    - system
     - uri
+    - webhook
     - id: oauth
       message: OAuth
       severity: MAJOR

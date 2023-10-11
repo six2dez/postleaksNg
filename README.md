@@ -1,6 +1,4 @@
-# Postleaks
-
-![](assets/postleaks-50.png)
+# postleaksNg
 
 ## Description
 
@@ -11,7 +9,7 @@ This script is aimed to search for these pieces of information in Postman public
 ## Installation
 
 ```bash
-pip3 install postleaks
+pip3 install postleaksNg
 ```
 
 or 
@@ -23,15 +21,14 @@ pip3 install .
 ## Usage
 
 ```bash
-❯ postleaks -h
-usage: postleaks [-h] -k KEYWORD [--extend-workspaces] [--include INCLUDE] [--exclude EXCLUDE] [--raw] [--output OUTPUT]
+❯ postleaksNg -h
+usage: postleaksNg [-h] -k KEYWORD [--include INCLUDE] [--exclude EXCLUDE] [--raw] [--output OUTPUT]
 
-Postleaks 🚀💧 Search for sensitive data in Postman public library.
+postleaksNg 🚀💧 Search for sensitive data in Postman public library.
 
 options:
   -h, --help           show this help message and exit
   -k KEYWORD           Keyword (Domain, company, etc.)
-  --extend-workspaces  Extend search to Postman workspaces linked to found requests (Warning: request consuming and risk of false positive)
   --include INCLUDE    URL should match this string
   --exclude EXCLUDE    URL should not match this string
   --raw                Display raw filtered results as JSON

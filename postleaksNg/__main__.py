@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 import whispers
 
-#from postleaks.config.regex_config import _regex, _domain_to_delete
+#from postleaksNg.config.regex_config import _regex, _domain_to_delete
 
 POSTMAN_HOST = "https://www.postman.com"
 
@@ -25,9 +25,8 @@ BOLD='\033[1m'
 NOCOLOR='\033[0m'
 
 def main():
-    parser = argparse.ArgumentParser(description=BOLD+'Postleaks 🚀💧'+NOCOLOR+" Search for sensitive data in Postman public library.")
+    parser = argparse.ArgumentParser(description=BOLD+'postleaksNg 🚀💧'+NOCOLOR+" Search for sensitive data in Postman public library.")
     parser.add_argument('-k', type=str, required=True, dest='keyword', help = "Keyword (Domain, company, etc.)")
-    parser.add_argument('--extend-workspaces', action="store_true", default=False, required=False, dest='extend_workspaces', help = "Extend search to Postman workspaces linked to found requests (Warning: request consuming and risk of false positive)")
     parser.add_argument('--include', type=str, required=False, dest='include', help = "URL should match this string")
     parser.add_argument('--exclude', type=str, required=False, dest='exclude', help = "URL should not match this string")
     parser.add_argument('--raw', action="store_true", default=False, required=False, dest='raw', help = "Display raw filtered results as JSON")
@@ -42,29 +41,24 @@ def main():
         timestamp_str = str(int(timestamp))
         output_folder = DEFAULT_OUTPUT_FOLDERNAME + timestamp_str;
 
-    request_infos = search(args.keyword, args.include, args.exclude, args.extend_workspaces, args.raw, output_folder)
+    request_infos = search(args.keyword, args.include, args.exclude, args.raw, output_folder)
     print(BLUE+"\n[*] "+str(len(request_infos))+" results founds. Happy (ethical) hacking!"+NOCOLOR)
     
-def search(keyword: str, include_match:str, exclude_match:str, extend_workspaces: bool, raw: bool, output: str):
+def search(keyword: str, include_match:str, exclude_match:str, raw: bool, output: str):
  
     print(BLUE+"[*] Looking for data in Postman.com")
     ids = search_requests_ids(keyword)
-
+    workspaces_ids = search_workspaces_ids(keyword)
+   
     request_ids = set()
-    workspaces_ids = set()
 
     for i in ids:
         key = next(iter(i.keys()))
         request_ids.add(key)
         
-        if extend_workspaces:
-            current_workspaces_ids = i.get(key)
-            for w in current_workspaces_ids:
-                workspaces_ids.add(w)
 
-    if extend_workspaces:
-        new_request_ids = search_request_ids_for_workspaces_id(workspaces_ids)
-        request_ids = request_ids.union(new_request_ids)
+    new_request_ids = search_request_ids_for_workspaces_id(workspaces_ids)
+    request_ids = request_ids.union(new_request_ids)
 
     return search_request_info_for_request_ids(request_ids, include_match, exclude_match, raw, output)
 
@@ -97,7 +91,8 @@ def display(request_info:any, raw:bool):
 def search_request_info_for_request_ids(ids: set, include_match:str, exclude_match:str, raw: bool, output: str):
     print(BLUE+"[*] Search for requests info in collection of requests"+NOCOLOR)
 
-    os.makedirs(output)
+    if not os.path.isdir(output):
+        os.makedirs(output)
 
     GET_REQUEST_ENDPOINT="/_api/request/"
 
@@ -126,18 +121,22 @@ def search_request_info_for_request_ids(ids: set, include_match:str, exclude_mat
                 continue
             else:
                 if "url" in request_info:
-                    request_infos.append(request_info)
-                    display(request_info, raw)
-                    f = store(request_info, output)
-                    identify_secrets(f)
+                    if request_info["url"] is not None and len(request_info["url"]) > 0:
+                        request_infos.append(request_info)
+                        display(request_info, raw)
+                        f = store(request_info, output)
+                        identify_secrets(f)
         
     return request_infos
 
 def identify_secrets(file_path: any):
     config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
-    for secret in whispers.secrets(f"-c {config_path} {file_path}"):
-        secret_str = str(secret).split(']', 1)[1].strip()
-        print(ORANGE+" > Potential secret found: " + secret_str + NOCOLOR)
+    try:
+        for secret in whispers.secrets(f"-c {config_path} {file_path}"):
+            secret_str = str(secret).split(']', 1)[1].strip()
+            print(ORANGE+" > Potential secret found: " + secret_str + NOCOLOR)
+    except Exception:
+        pass
 
 def store(request_info: any, output: str):
     file_path = output + "/" + request_info["id"] + ".json"
@@ -166,7 +165,7 @@ def parse_search_requests_from_workspace_response(list_collection_response):
     json = list_collection_response.json()
     if "data" in json:
         data = json["data"]
-        
+
         request_ids = set()
         for d in data:
             requests_raw = d["requests"]
@@ -196,6 +195,21 @@ def search_requests_ids(keyword: str):
             ids.extend(parsed)
     return ids
 
+def search_workspaces_ids(keyword: str):
+    print(BLUE+"[*] Searching for workspaces IDs"+NOCOLOR)
+
+    MAX_SEARCH_RESULTS = 100
+    GLOBAL_SEARCH_ENDPOINT="/_api/ws/proxy"
+
+    session = requests.Session()
+    response = session.post(POSTMAN_HOST+GLOBAL_SEARCH_ENDPOINT, json=format_search_request_body_workspace(keyword, 0, MAX_SEARCH_RESULTS))
+
+    count = response.json()["meta"]["total"]["workspace"]
+    
+    ids = parse_search_response_workspace(response)
+
+    return ids
+
 def parse_search_response(search_response):
 
     json = search_response.json()
@@ -208,7 +222,7 @@ def parse_search_response(search_response):
     # List composed of {"<requestId>":["workspaceId", ...]}
     ids = []
     for d in data:
-        
+
         request_item = {}
 
         request_id = d["document"]["id"]
@@ -223,6 +237,22 @@ def parse_search_response(search_response):
         
     return ids
 
+def parse_search_response_workspace(search_response):
+
+    json = search_response.json()
+    
+    if "data" not in json:
+        fail("No data found")
+    
+    data = json["data"]
+
+    # List composed of {"<requestId>":["workspaceId", ...]}
+    workspace_ids = []
+    for d in data:
+        workspace_ids.append(d["document"]["id"])
+        
+    return workspace_ids
+
 def format_search_request_body(keyword: str, offset: int, size: int):
     return {
         "service":"search",
@@ -230,6 +260,22 @@ def format_search_request_body(keyword: str, offset: int, size: int):
         "path":"/search-all",
         "body":{
             "queryIndices":["runtime.request"],
+            "queryText": keyword,
+            "size": size,
+            "from": offset,
+            "requestOrigin":"srp",
+            "mergeEntities":"true",
+            "nonNestedRequests":"true"
+            }
+        }
+
+def format_search_request_body_workspace(keyword: str, offset: int, size: int):
+    return {
+        "service":"search",
+        "method":"POST",
+        "path":"/search-all",
+        "body":{
+            "queryIndices":["collaboration.workspace"],
             "queryText": keyword,
             "size": size,
             "from": offset,

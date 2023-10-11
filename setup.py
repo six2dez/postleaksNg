@@ -6,14 +6,14 @@ from os import path
 import io
 
 VERSION = '1.0.1' 
-DESCRIPTION = 'Postleaks'
+DESCRIPTION = 'postleaksNg'
 
 pwd = path.abspath(path.dirname(__file__))
 with io.open(path.join(pwd, "README.md"), encoding="utf-8") as readme:
     LONG_DESCRIPTION = readme.read()
 
 setup(
-    name="postleaks", 
+    name="postleaksNg", 
     version=VERSION,
     author="Sébastien Copin",
     author_email="cosad3s@outlook.com",
@@ -26,11 +26,11 @@ setup(
         '': ['config.yml'],
     },
     install_requires=["requests", "argparse", "whispers"],
-    url="https://github.com/cosad3s/postleaks",
+    url="https://github.com/six2dez/postleaksNg",
     keywords=['leaks', 'postman', 'osint', 'bugbounty'],
     entry_points={
         "console_scripts": [
-            "postleaks = postleaks.__main__:main"
+            "postleaksNg = postleaksNg.__main__:main"
         ]
     },
     include_package_data = True,
