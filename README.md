@@ -22,7 +22,7 @@ pip3 install .
 
 ```bash
 ❯ postleaksNg -h
-usage: postleaksNg [-h] -k KEYWORD [--include INCLUDE] [--exclude EXCLUDE] [--raw] [--output OUTPUT]
+usage: postleaksNg [-h] -k KEYWORD [--include INCLUDE] [--exclude EXCLUDE] [--raw] [--output OUTPUT] [-t THREADS]
 
 postleaksNg 🚀💧 Search for sensitive data in Postman public library.
 
@@ -33,6 +33,8 @@ options:
   --exclude EXCLUDE    URL should not match this string
   --raw                Display raw filtered results as JSON
   --output OUTPUT      Store JSON in specific output folder (Default: results_<TIMESTAMP>)
+  -t THREADS, --threads THREADS
+                        Number of threads (Default: 10)
 ```
 
 *The results are available in `results_<TIMESTAMP>` subfolder. The filename is the request identifier in Postman.com*

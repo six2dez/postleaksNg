@@ -8,6 +8,8 @@ import math
 import json
 import os
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from requests.exceptions import RequestException
 import whispers
 
 #from postleaksNg.config.regex_config import _regex, _domain_to_delete
@@ -31,6 +33,7 @@ def main():
     parser.add_argument('--exclude', type=str, required=False, dest='exclude', help = "URL should not match this string")
     parser.add_argument('--raw', action="store_true", default=False, required=False, dest='raw', help = "Display raw filtered results as JSON")
     parser.add_argument('--output', type=str, required=False, dest='output', help = "Store JSON in specific output folder (Default: results_<TIMESTAMP>)")
+    parser.add_argument('-t', '--threads', type=int, default=10, required=False, dest='threads', help = "Number of threads (Default: 10)")
     args = parser.parse_args()
 
     output_folder = ""
@@ -41,15 +44,24 @@ def main():
         timestamp_str = str(int(timestamp))
         output_folder = DEFAULT_OUTPUT_FOLDERNAME + timestamp_str;
 
-    request_infos = search(args.keyword, args.include, args.exclude, args.raw, output_folder)
-    print(BLUE+"\n[*] "+str(len(request_infos))+" results founds. Happy (ethical) hacking!"+NOCOLOR)
+    try:
+        request_infos = search(args.keyword, args.include, args.exclude, args.raw, output_folder, args.threads)
+        print(BLUE+"\n[*] "+str(len(request_infos))+" results found. Happy (ethical) hacking!"+NOCOLOR)
+        print(BLUE+"[*] Results stored in: "+output_folder+NOCOLOR)
+    except KeyboardInterrupt:
+        print(ORANGE+"\n[!] Interrupted by user. Exiting..."+NOCOLOR)
+        sys.exit(0)
     
-def search(keyword: str, include_match:str, exclude_match:str, raw: bool, output: str):
+def search(keyword: str, include_match:str, exclude_match:str, raw: bool, output: str, threads: int):
  
     print(BLUE+"[*] Looking for data in Postman.com")
     ids = search_requests_ids(keyword)
     workspaces_ids = search_workspaces_ids(keyword)
    
+    if not ids and not workspaces_ids:
+        print(ORANGE+"[-] No results found for this keyword."+NOCOLOR)
+        return []
+
     request_ids = set()
 
     for i in ids:
@@ -57,10 +69,10 @@ def search(keyword: str, include_match:str, exclude_match:str, raw: bool, output
         request_ids.add(key)
         
 
-    new_request_ids = search_request_ids_for_workspaces_id(workspaces_ids)
+    new_request_ids = search_request_ids_for_workspaces_id(workspaces_ids, threads)
     request_ids = request_ids.union(new_request_ids)
 
-    return search_request_info_for_request_ids(request_ids, include_match, exclude_match, raw, output)
+    return search_request_info_for_request_ids(request_ids, include_match, exclude_match, raw, output, keyword, threads)
 
 def display(request_info:any, raw:bool):
     if raw:
@@ -88,52 +100,64 @@ def display(request_info:any, raw:bool):
                 print("[" + d["key"] + "=" + repr(d["value"]) + "]", end='')
     print(NOCOLOR)
 
-def search_request_info_for_request_ids(ids: set, include_match:str, exclude_match:str, raw: bool, output: str):
+def search_request_info_for_request_ids(ids: set, include_match:str, exclude_match:str, raw: bool, output: str, keyword: str, threads: int):
     print(BLUE+"[*] Search for requests info in collection of requests"+NOCOLOR)
 
     if not os.path.isdir(output):
         os.makedirs(output)
 
-    GET_REQUEST_ENDPOINT="/_api/request/"
-
     request_infos = []
-
     session = requests.Session()
-    for id in ids:
-        response = session.get(POSTMAN_HOST+GET_REQUEST_ENDPOINT+str(id))
-        
-        request_info = {}
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    })
 
-        if "data" in response.json():
-            data = response.json()["data"]
+    def fetch_and_process_request(request_id):
+        GET_REQUEST_ENDPOINT="/_api/request/"
+        try:
+            response = session.get(POSTMAN_HOST+GET_REQUEST_ENDPOINT+str(request_id), timeout=10)
+            if response.status_code != 200:
+                return None
+            
+            res_json = response.json()
+            if "data" not in res_json:
+                return None
+            
+            data = res_json["data"]
+            request_info = {}
+            
+            for key, value in data.items():
+                if key in REQUEST_INFO_INTERESTING_DATA:
+                    # URL filtering
+                    if key == "url" and value is not None and len(value) > 0 and (include_match is not None or exclude_match is not None):
+                        if (include_match is not None and include_match.lower() not in value.lower()):
+                            return None
+                        if (exclude_match is not None and exclude_match.lower() in value.lower()):
+                            return None
+                    request_info[key] = value
+            
+            if "url" in request_info:
+                if request_info["url"] is not None and len(request_info["url"]) > 0 and str(keyword) in request_info["url"] and "localhost" not in request_info["url"]:
+                    #display(request_info, raw)
+                    f = store(request_info, output)
+                    identify_secrets(f, request_info, raw)
+                    return request_info
+        except Exception:
+            pass
+        return None
 
-            try:
-                for key, value in data.items():
-                    if key in REQUEST_INFO_INTERESTING_DATA:
-                        # URL filtering
-                        if key == "url" and value is not None and len(value) > 0 and (include_match is not None or exclude_match is not None):
-                            if (include_match is not None and include_match.lower() not in value.lower()):
-                                raise StopIteration
-                            if (exclude_match is not None and exclude_match.lower() in value.lower()):
-                                raise StopIteration
-                        request_info[key] = value
-            except StopIteration:
-                continue
-            else:
-                if "url" in request_info:
-                    if request_info["url"] is not None and len(request_info["url"]) > 0:
-                        request_infos.append(request_info)
-                        display(request_info, raw)
-                        f = store(request_info, output)
-                        identify_secrets(f)
-        
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        results = list(executor.map(fetch_and_process_request, ids))
+    
+    request_infos = [r for r in results if r is not None]
     return request_infos
 
-def identify_secrets(file_path: any):
+def identify_secrets(file_path: any, request_info, raw):
     config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
     try:
         for secret in whispers.secrets(f"-c {config_path} {file_path}"):
             secret_str = str(secret).split(']', 1)[1].strip()
+            display(request_info, raw)
             print(ORANGE+" > Potential secret found: " + secret_str + NOCOLOR)
     except Exception:
         pass
@@ -145,19 +169,30 @@ def store(request_info: any, output: str):
         file.write(json_string)
     return file_path
 
-def search_request_ids_for_workspaces_id(ids: set):
+def search_request_ids_for_workspaces_id(ids: set, threads: int):
     print(BLUE+"[*] Looking for requests IDs in collection of workspaces"+NOCOLOR)
 
     LIST_COLLECTION_ENDPOINT="/_api/list/collection"
 
     request_ids = set()
-
     session = requests.Session()
-    for id in ids:
-        response = session.post(POSTMAN_HOST+LIST_COLLECTION_ENDPOINT+"?workspace="+str(id))
-        new_request_ids = parse_search_requests_from_workspace_response(response)
-        if new_request_ids is not None:
-            request_ids = request_ids.union(new_request_ids)
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    })
+
+    def fetch_workspace_collections(workspace_id):
+        try:
+            response = session.post(POSTMAN_HOST+LIST_COLLECTION_ENDPOINT+"?workspace="+str(workspace_id), timeout=10)
+            return parse_search_requests_from_workspace_response(response)
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        results = list(executor.map(fetch_workspace_collections, ids))
+    
+    for res in results:
+        if res:
+            request_ids = request_ids.union(res)
 
     return request_ids
 
@@ -177,12 +212,20 @@ def parse_search_requests_from_workspace_response(list_collection_response):
 def search_requests_ids(keyword: str):
     print(BLUE+"[*] Searching for requests IDs"+NOCOLOR)
 
-    MAX_SEARCH_RESULTS = 100
+    MAX_SEARCH_RESULTS = 25
     GLOBAL_SEARCH_ENDPOINT="/_api/ws/proxy"
 
     session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    })
     response = session.post(POSTMAN_HOST+GLOBAL_SEARCH_ENDPOINT, json=format_search_request_body(keyword, 0, MAX_SEARCH_RESULTS))
-    count = response.json()["meta"]["total"]["request"]
+    
+    res_json = response.json()
+    if "meta" not in res_json:
+        err_msg = res_json.get("detail") or res_json.get("message") or res_json.get("title") or "Unknown error"
+        fail(f"Search failed: {err_msg}")
+    count = res_json["meta"]["total"]["request"]
     
     ids = parse_search_response(response)
 
@@ -191,20 +234,28 @@ def search_requests_ids(keyword: str):
         for i in range(1, max_requests+1):
             offset = i*MAX_SEARCH_RESULTS
             r = session.post(POSTMAN_HOST+GLOBAL_SEARCH_ENDPOINT, json=format_search_request_body(keyword, offset, MAX_SEARCH_RESULTS))
-            parsed = parse_search_response(r)
-            ids.extend(parsed)
+            if r.status_code == 200:
+                parsed = parse_search_response(r)
+                ids.extend(parsed)
     return ids
 
 def search_workspaces_ids(keyword: str):
     print(BLUE+"[*] Searching for workspaces IDs"+NOCOLOR)
 
-    MAX_SEARCH_RESULTS = 100
+    MAX_SEARCH_RESULTS = 25
     GLOBAL_SEARCH_ENDPOINT="/_api/ws/proxy"
 
     session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    })
     response = session.post(POSTMAN_HOST+GLOBAL_SEARCH_ENDPOINT, json=format_search_request_body_workspace(keyword, 0, MAX_SEARCH_RESULTS))
 
-    count = response.json()["meta"]["total"]["workspace"]
+    res_json = response.json()
+    if "meta" not in res_json:
+        err_msg = res_json.get("detail") or res_json.get("message") or res_json.get("title") or "Unknown error"
+        fail(f"Search failed: {err_msg}")
+    count = res_json["meta"]["total"]["workspace"]
     
     ids = parse_search_response_workspace(response)
 
